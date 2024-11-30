@@ -7,7 +7,7 @@ from datasets import DatasetDict, load_dataset
 from peft import get_peft_model, LoraConfig
 
 # Load the dataset
-dataset = load_dataset('csv', data_files='data_path.csv')
+dataset = load_dataset('csv', data_files='differential_privacy.csv')
 
 # Split the dataset into training and testing sets
 train_test = dataset['train'].train_test_split(test_size=0.2, seed=42)
