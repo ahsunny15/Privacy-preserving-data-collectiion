@@ -1,0 +1,164 @@
+
+!pip install datasets peft transformers
+
+import pandas as pd, torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+from datasets import DatasetDict, load_dataset
+from peft import get_peft_model, LoraConfig
+
+# Load the dataset
+dataset = load_dataset('csv', data_files='data_path.csv')
+
+# Split the dataset into training and testing sets
+train_test = dataset['train'].train_test_split(test_size=0.2, seed=42)
+train_dataset, test_dataset = train_test['train'], train_test['test']
+
+# Load the model
+model_name = "meta-llama/Llama-2-7b-hf"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+tokenizer.pad_token = tokenizer.eos_token
+model.config.pad_token_id = tokenizer.eos_token_id
+
+# Apply Lora 
+lora_config = LoraConfig(
+  r = 8,               
+  lora_alpha = 32,     
+  lora_dropout = 0.1,  
+  target_modules = ["q_proj","k_proj","v_proj","o_proj"],  # Apply lora to attention layers
+  task_type = "CAUSAL_LM"
+)
+model = get_peft_model(model, lora_config)
+
+# Create input text 
+def create_input_text(example):
+  return (
+    f"Age: {example['age']}, Gender: {example['gender']}, "
+    f"Admission: {example[admission_type]}, Ethnicity: {example[race]}, "
+    f"Symptoms: {example['symptoms']}, Diagnosis: {example['diagnoses']}. "
+    f"Suggest a medical procedure (20 words max):"
+  )
+
+# Set procedure as target
+train_dataset = train_dataset.map(lambda x: {'input_text': create_input_text(x), 'labels': x['procedures']})
+test_dataset = test_dataset.map(lambda x: {'input_text': create_input_text(x), 'labels': x['procedures']})
+
+# Tokenization function
+def tokenize_function(examples):
+  # Tokenize the input text
+  tokenized_inputs = tokenizer(
+    examples['input_text'],
+    padding='max_length',   
+    truncation=True,            
+    max_length=128           
+  )
+
+# Tokenize the procedure labels 
+tokenized_labels = tokenizer(
+  examples['labels'],
+  padding='max_length',  
+  truncation=True,       
+  max_length=128         
+)
+
+# Set the labels to the tokenized procedure 
+tokenized_inputs["labels"] = tokenized_labels["input_ids"]
+
+# Padding tokens are ignored during loss calculation by replacing pad_token_id with -100
+tokenized_inputs["labels"] = [
+  [(label if label != tokenizer.pad_token_id else -100) for label in labels]
+  for labels in tokenized_inputs["labels"]
+]
+return tokenized_inputs
+
+tokenized_train = train_dataset.map(tokenize_function, batched=True)
+tokenized_test = test_dataset.map(tokenize_function, batched=True)
+
+# Add accuracy 
+!pip install scikit-learn
+!pip install datasets evaluate
+from evaluate import load 
+
+# Load accuracy metric
+accuracy_metric = load("accuracy")
+def compute_accuracy(pred):
+  predictions = pred.predictions.argmax(-1)  
+labels = pred.label_ids
+
+# Filter out padding tokens
+mask = labels != -100
+predictions = predictions[mask]
+labels = labels[mask]
+
+# Compute accuracy
+accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
+return {"accuracy": accuracy["accuracy"]}
+
+
+# Training arguments
+training_args = TrainingArguments(
+  output_dir = './results',            
+  eval_strategy = "epoch",
+  learning_rate = 2e-5,
+  per_device_train_batch_size = 4,
+  per_device_eval_batch_size = 4,
+  num_train_epochs = 4,
+  weight_decay = 0.01, 
+  logging_dir = './logs',
+  logging_steps = 1500,
+  save_total_limit = 3,
+  prediction_loss_only = False,		
+  report_to = "none",				
+  do_train = True,				
+  do_eval = True, 				
+)
+
+trainer = Trainer(
+  model = model,
+  args = training_args,
+  train_dataset = tokenized_train,
+  eval_dataset = tokenized_test,
+  tokenizer = tokenizer,
+  compute_metrics=compute_accuracy,
+)
+
+# Train the model 
+trainer.train()
+
+# Inference (Generate predictions for new inputs)
+def predict(input_text):
+  # Tokenize the input text
+  device = "cuda:0"
+
+inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=128).to(device) 
+
+# Generate predictions
+outputs = model.generate(
+  input_ids=inputs["input_ids"],
+  eos_token_id=tokenizer.eos_token_id,    
+  max_new_tokens=50,                         
+  num_beams=5,                            
+  early_stopping=True
+  repetition_penalty = 1.5		            
+)
+# Decode the generated text
+prediction = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+return prediction
+
+# Example usage with a new input row
+example = {
+  'age': 55, 
+  'gender': 'Female', 
+  'admission_type': 'Emergency', 
+  'race': 'Hispanic', 
+  'symptoms': 'chest pain, shortness of breath', 
+  'diagnoses': 'hypertension, coronary artery disease'
+}
+
+input_text= create_input_text(example)
+# Generate the procedure prediction
+predicted_procedure = predict(input_text)
+print("Predicted Procedure:", predicted_procedure)
+
+
