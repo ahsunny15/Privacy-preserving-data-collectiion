@@ -14,7 +14,7 @@ train_test = dataset['train'].train_test_split(test_size=0.2, seed=42)
 train_dataset, test_dataset = train_test['train'], train_test['test']
 
 # Load the model
-model_name = "meta-llama/Llama-2-7b-hf"
+model_name = "meta-llama/Llama-3.2-3B"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
 
@@ -42,7 +42,6 @@ def create_input_text(example):
         f" Symptoms: {example['symptoms']}\n"
         f" Diagnoses: {example['diagnoses']}\n\n"
         f" Task: Based on the information above, suggest the most appropriate medical procedure. "
-        f"{tokenizer.eos_token}\n"
         )
 
 # Mapping the labels
