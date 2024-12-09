@@ -17,31 +17,44 @@ train_dataset, test_dataset = train_test['train'], train_test['test']
 model_name = "meta-llama/Llama-2-7b-hf"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
-model.config.pad_token_id = tokenizer.eos_token_id
+
 
 # Apply Lora 
 lora_config = LoraConfig(
-  r = 8,               
-  lora_alpha = 32,     
-  lora_dropout = 0.1,  
-  target_modules = ["q_proj","k_proj","v_proj","o_proj"],  # Apply lora to attention layers
-  task_type = "CAUSAL_LM"
+    r = 16,               # Low-rank dimension
+    lora_alpha = 32,     # Alpha Scaling factor
+    lora_dropout = 0.1,  # Dropout for stability
+    target_modules = ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],  # Apply LoRA to attention layers
+    task_type = "CAUSAL_LM"
 )
 model = get_peft_model(model, lora_config)
+
+# Add padding
+tokenizer.pad_token = tokenizer.eos_token
+model.config.pad_token_id = tokenizer.eos_token_id
 
 # Create input text 
 def create_input_text(example):
   return (
-    f"Age: {example['age']}, Gender: {example['gender']}, "
-    f"Admission: {example[admission_type]}, Ethnicity: {example[race]}, "
-    f"Symptoms: {example['symptoms']}, Diagnosis: {example['diagnoses']}. "
-    f"Suggest a medical procedure (20 words max):"
-  )
+        f"Patient details:\n"
+        f" Age: {example['age']}\n"
+        f" Gender: {example['gender']}\n"
+        f" Symptoms: {example['symptoms']}\n"
+        f" Diagnoses: {example['diagnoses']}\n\n"
+        f" Task: Based on the information above, suggest the most appropriate medical procedure. "
+        f"{tokenizer.eos_token}\n"
+        )
 
-# Set procedure as target
-train_dataset = train_dataset.map(lambda x: {'input_text': create_input_text(x), 'labels': x['procedures']})
-test_dataset = test_dataset.map(lambda x: {'input_text': create_input_text(x), 'labels': x['procedures']})
+# Mapping the labels
+train_dataset = train_dataset.map(lambda x: {
+    'input_text': create_input_text(x),
+    'labels': f"{x['procedures']}. {tokenizer.eos_token}"
+})
+test_dataset = test_dataset.map(lambda x: {
+    'input_text': create_input_text(x), 
+    'labels': f"{x['procedures']}. {tokenizer.eos_token}"
+    })
+
 
 # Tokenization function
 def tokenize_function(examples):
@@ -50,7 +63,8 @@ def tokenize_function(examples):
     examples['input_text'],
     padding='max_length',   
     truncation=True,            
-    max_length=128           
+    max_length=128,
+    return_tensors="pt"
   )
 
 # Tokenize the procedure labels 
@@ -58,19 +72,18 @@ tokenized_labels = tokenizer(
   examples['labels'],
   padding='max_length',  
   truncation=True,       
-  max_length=128         
+  max_length=128,
+  return_tensors="pt"
 )
-
-# Set the labels to the tokenized procedure 
-tokenized_inputs["labels"] = tokenized_labels["input_ids"]
 
 # Padding tokens are ignored during loss calculation by replacing pad_token_id with -100
 tokenized_inputs["labels"] = [
-  [(label if label != tokenizer.pad_token_id else -100) for label in labels]
-  for labels in tokenized_inputs["labels"]
+        [(label if label != tokenizer.pad_token_id else -100) for label in labels]
+        for labels in tokenized_labels["input_ids"]
 ]
 return tokenized_inputs
 
+# Mapping the tokenizer
 tokenized_train = train_dataset.map(tokenize_function, batched=True)
 tokenized_test = test_dataset.map(tokenize_function, batched=True)
 
@@ -149,8 +162,6 @@ return prediction
 example = {
   'age': 55, 
   'gender': 'Female', 
-  'admission_type': 'Emergency', 
-  'race': 'Hispanic', 
   'symptoms': 'chest pain, shortness of breath', 
   'diagnoses': 'hypertension, coronary artery disease'
 }
