@@ -28,10 +28,10 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # Apply Lora 
 lora_config = LoraConfig(
-    r = 16,               # Low-rank dimension
-    lora_alpha = 32,     # Alpha Scaling factor
-    lora_dropout = 0.1,  # Dropout for stability
-    target_modules = ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],  # Apply LoRA to attention layers
+    r = 16,               
+    lora_alpha = 32,     
+    lora_dropout = 0.1,  
+    target_modules = ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],  
     task_type = "CAUSAL_LM",
     bias = "none"
 )
@@ -39,32 +39,35 @@ model = get_peft_model(model, lora_config)
 
 
 # Load the dataset
-dataset = load_dataset('csv', data_files='differential_privacy.csv')
+dataset = load_dataset('csv', data_files='differential_privacy.csv', nrows=2000)
 
 # Split the dataset into training and testing sets
 train_test = dataset['train'].train_test_split(test_size=0.2, seed=42)
 train_dataset, test_dataset = train_test['train'], train_test['test']
 
 
-# Add padding
-tokenizer.pad_token = tokenizer.eos_token
-model.config.pad_token_id = tokenizer.eos_token_id
+# Adding Eos & padding tokens
+EOS_TOKEN = tokenizer.eos_token_id
+tokenizer.add_special_tokens({"pad_token": "<|reserved_special_token_0|>"})
+model.config.pad_token_id = tokenizer.pad_token_id # updating model config
 tokenizer.padding_side = 'right' 
 
 # Create input text 
 def create_input_text(example):
   input_text = (
-        f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>"
-        f"You are a helpful AI assistant for medical procedure prediction. "
-        f"Remember, maintain a natural tone. Be precise, concise, and casual. Use only the procedures to generate answers. <|eot|>"
-        
-        f"<|start_header_id|>user<|end_header_id|>"
-        f"Given the patient information: Age: {example['age']}, Gender: {example['gender']}, Symptoms: {example['symptoms']}, Diagnoses: {example['diagnoses']} <|eot|>"
-        
-        f"<|start_header_id|>assistant<|end_header_id|>"
-        f" {example['procedures']}. <|eot|>"
-        f"<|end_of_text|>"
-    )
+f"### Instruction: "
+f"Based on the provided patient information, generate a precise medical procedure."
+
+f"### Context: "
+f" Age: {example['age']},"
+f" Gender: {example['gender']},"
+f" Symptoms: {example['symptoms']},"
+f" Diagnoses: {example['diagnoses']}.\n"
+
+f"### Response:"
+f" {example['procedures']}."
+
+)
   return input_text
 
 # Mapping the labels
@@ -74,12 +77,29 @@ test_dataset = test_dataset.map(lambda x: {'input_text': create_input_text(x)})
 
 # Tokenization function
 def tokenize_function(examples):
+    # Find the longest input text
+    longest_input_length = max(len(tokenizer(text)['input_ids']) for text in examples['input_text'])
+
+    # Set the dynamic max length and 1 extra space for eos token
+    max_length = longest_input_length + 1
+
     tokenized_inputs = tokenizer(
         examples['input_text'],
-        padding='max_length',
         truncation=True,
-        max_length=256
+        max_length=max_length
     )
+
+    # Adding eos and pad manually
+    for input_ids in tokenized_inputs['input_ids']:
+        if len(input_ids) < max_length:
+            input_ids.append(tokenizer.eos_token_id)  
+            input_ids.extend([tokenizer.pad_token_id] * (max_length - len(input_ids)))
+
+    # Adjust attention masks for padding
+    for attention_mask in tokenized_inputs['attention_mask']:
+        if len(attention_mask) < max_length:
+            attention_mask.append(1)  
+            attention_mask.extend([0] * (max_length - len(attention_mask)))
 
     return tokenized_inputs
 
@@ -99,7 +119,7 @@ training_args = TrainingArguments(
   num_train_epochs = 4,
   weight_decay = 0.01, 
   logging_dir = './logs',
-  logging_steps = 200,
+  logging_steps = 500,
   save_total_limit = 3,
   prediction_loss_only = False,		
   report_to = "none",				
@@ -124,7 +144,7 @@ def predict(input_text):
     # Tokenize the input text
     device = "cuda:0"
     
-    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device) #moving the model to the same device
+    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device) #moving the model to the same device
 
 # Generate predictions
     outputs = model.generate(
