@@ -45,3 +45,20 @@ To evaluate both the privacy and utility of the trained models, several metrics 
       <h4>&#8226;  ROUGE scores to measure the relevance and quality of the generated text</h4>
       <h4>&#8226;  Perplexity to evaluate the model’s predictive performance</h4>
       <h4>&#8226;  Human Evaluation to assess the clinical coherence and usefulness of the generated treatment recommendations</h4>
+
+<h2>Findings</h2>
+<h3>Membership Inference Attack</h3>
+
+![MIA](https://github.com/user-attachments/assets/8131ff6a-ca12-4e33-9382-73a88b00c811)
+
+<h3>Perplexity Score</h3>
+
+<img width="600" height="300" alt="perplexity_scores" src="https://github.com/user-attachments/assets/e424425a-43f1-45d0-8779-cf7851e933ff" />
+
+<h3>ROUGE Score</h3>
+
+<img width="600" height="300" alt="rouge_scores" src="https://github.com/user-attachments/assets/dce1dfaa-3e26-4819-a47b-d340ceed3183" />
+
+<h3>Human Evaluation Score</h3>
+
+<img width="600" height="500" alt="radar_chart" src="https://github.com/user-attachments/assets/5a564322-299a-4a10-b2be-2a51784788b1" />
